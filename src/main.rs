@@ -47,7 +47,7 @@ fn main() {
     accumulator = accum_add(accumulator, v2, sk);
     let witness = accum_witness(accumulator, v1, sk);
 
-    let is_valid = accum_verify(accumulator, witness, v3, pk);
+    let is_valid = accum_verify(accumulator, witness, v1, pk);
     let is_valid: bool = is_valid.into();
 
     println!("sk: {}", hex::encode(sk.to_bytes()));
