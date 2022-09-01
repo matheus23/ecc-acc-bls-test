@@ -45,9 +45,9 @@ fn main() {
     let mut accumulator = G1Projective::generator();
     accumulator = accum_add(accumulator, v1, sk);
     accumulator = accum_add(accumulator, v2, sk);
-    let witness = accum_witness(accumulator, v1, sk);
+    let witness = accum_witness(accumulator, v3, sk);
 
-    let is_valid = accum_verify(accumulator, witness, v1, pk);
+    let is_valid = accum_verify(accumulator, witness, v3, pk);
     let is_valid: bool = is_valid.into();
 
     println!("sk: {}", hex::encode(sk.to_bytes()));
@@ -72,4 +72,16 @@ fn test_add_and_remove_is_identity() {
     let accumulator3 = accum_remove(accumulator2, v1, sk);
 
     assert_eq!(accumulator1, accumulator3);
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::{collection::hash_set, prelude::*};
+
+    proptest! {
+        #[test]
+        fn test_added_is_verified(seed in any::<[u8; 32]>().no_shrink(), values in hash_set()) {
+            hash_set(element, size)
+        }
+    }
 }
