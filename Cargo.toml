@@ -6,13 +6,23 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bls12_381 = "0.7.0"
+bls12_381 = { version = "0.7.0", features = ["experimental"] }
 ff = "0.12.0"
 group = "0.12.0"
 hex = "0.4.3"
+num-bigint-dig = { version = "0.8.1", features = ["prime"] }
 proptest = "1.0.0"
+rand_chacha = "0.3.1"
+sha2 = "0.10.6"
 subtle = "2.4.1"
 
 [profile.dev]
 opt-level = 3
 strip = false
+
+[dev-dependencies]
+criterion = "0.4.0"
+
+[[bench]]
+name = "prime_rand"
+harness = false
