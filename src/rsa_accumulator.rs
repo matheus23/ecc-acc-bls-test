@@ -10,24 +10,28 @@ use num_traits::One;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct RSASetup {
     modulus: BigUint,
     modulus_half: BigUint, // invariant: modulus_half = floor(modulus / 2)
 }
 
 impl RSASetup {
-    fn new(bits: usize, rng: &mut impl RngCore) -> Self {
-        let modulus = &rng.gen_prime(bits / 2) * &rng.gen_prime(bits / 2);
+    fn from(modulus: BigUint) -> Self {
         let modulus_half = &modulus / BigUint::from(2u8);
         Self {
             modulus,
             modulus_half,
         }
     }
+
+    fn new(bits: usize, rng: &mut impl RngCore) -> Self {
+        let modulus = &rng.gen_prime(bits / 2) * &rng.gen_prime(bits / 2);
+        Self::from(modulus)
+    }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct QRPlus {
     params: Rc<RSASetup>,
     num: BigUint, // invariant: num \in [0, params.modulus / 2)
@@ -85,20 +89,26 @@ fn positive_normalize(num: &mut BigUint, params: &RSASetup) {
     }
 }
 
-#[derive(Clone)]
-struct Accumulator {
+#[derive(Debug, Clone)]
+pub struct Accumulator {
     params: Rc<RSASetup>,
     state: QRPlus,
 }
 
 impl Accumulator {
-    fn new(bits: usize, rng: &mut impl RngCore) -> Self {
+    pub fn from(modulus: BigUint, rng: &mut impl RngCore) -> Self {
+        let params = Rc::new(RSASetup::from(modulus));
+        let state = QRPlus::new(Rc::clone(&params), rng);
+        Self { params, state }
+    }
+
+    pub fn new(bits: usize, rng: &mut impl RngCore) -> Self {
         let params = Rc::new(RSASetup::new(bits, rng));
         let state = QRPlus::new(Rc::clone(&params), rng);
         Self { params, state }
     }
 
-    fn add(&mut self, prime_elem: &BigUint) {
+    pub fn add(&mut self, prime_elem: &BigUint) {
         if !probably_prime(prime_elem, 20) {
             panic!("Parameter needs to be prime!");
         }
@@ -106,13 +116,13 @@ impl Accumulator {
         self.state.pow(prime_elem);
     }
 
-    fn simple_verify(&self, witness: &Self, prime_elem: &BigUint) -> bool {
+    pub fn simple_verify(&self, witness: &Self, prime_elem: &BigUint) -> bool {
         let mut w = witness.clone();
         w.add(prime_elem);
         w.state == self.state
     }
 
-    fn add_batch(&mut self, primes: &[BigUint]) -> PokeStar {
+    pub fn add_batch(&mut self, primes: &[BigUint]) -> PokeStar {
         let witness = self.state.clone();
 
         for prime in primes.iter() {
@@ -137,7 +147,7 @@ impl Accumulator {
         PokeStar { l_nonce, big_q, r }
     }
 
-    fn verify(&self, witness: &Self, proof: &PokeStar) -> bool {
+    pub fn verify(&self, witness: &Self, proof: &PokeStar) -> bool {
         let mut hasher = sha3::Sha3_256::new();
         hasher.update(&self.params.modulus.to_bytes_le());
         hasher.update(&witness.state.num.to_bytes_le());
@@ -162,7 +172,8 @@ impl Accumulator {
 /// PoKE* (Proof of Knowledge of Exponent),
 /// assuming that the base is trusted
 /// (e.g. part of a common reference string, CRS).
-struct PokeStar {
+#[derive(Debug, Clone)]
+pub struct PokeStar {
     l_nonce: u32,
     big_q: BigUint,
     r: BigUint,
@@ -199,6 +210,32 @@ fn test_add_poke() {
     let proof = acc.add_batch(&elems);
     assert!(acc.verify(&witness, &proof));
     assert!(!acc.verify(&acc, &proof));
+}
+
+#[test]
+fn test_golden_poke() {
+    let rng = &mut ChaCha12Rng::from_seed(*b"Hello yes this is dog. Or seed.?");
+    let bits = 2048;
+    let mut acc = Accumulator::new(bits, rng);
+    let elems = [
+        rng.gen_prime(256),
+        rng.gen_prime(256),
+        rng.gen_prime(256),
+        rng.gen_prime(256),
+    ];
+    let witness = acc.clone();
+    let proof = acc.add_batch(&elems);
+    assert!(acc.verify(&witness, &proof));
+    assert!(!acc.verify(&acc, &proof));
+    // println!("l_nonce: {}", proof.l_nonce);
+    // println!("big_q: {}", proof.big_q);
+    // println!("r: {}", proof.r);
+    assert_eq!(proof.l_nonce.to_string(), "8");
+    assert_eq!(proof.big_q.to_string(), "8409876224065280613797694548964236694502270756376562071381105811817285063835834270766028060927599775054808890058975111835048261352946293480288259808548006750032703295192015588193327429982320216042858602771871685378214073242491387027672710350772276401776856424112720398319262246092753143317972339262235949369921342802895407883818547136524657379615581152287007457703214243248689462523048779063144325264697105566222711681755279548300048803718105225423218377201581130548415325430788307992260686433957444033358827014496583453713620082391848594260119516879051639022509815961111057103716320899807113080527495003819943089985");
+    assert_eq!(
+        proof.r.to_string(),
+        "5853184725620449521594003835260194072898583518750701750781116516759621283462"
+    );
 }
 
 fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {
