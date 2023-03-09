@@ -54,45 +54,73 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     //         criterion::BatchSize::SmallInput,
     //     )
     // });
-    c.bench_function("div mod of product naive (256000 bits)", |b| {
-        b.iter_batched(
-            || {
-                let rng = &mut ChaCha12Rng::from_entropy();
-                let l = rng.gen_prime(128);
-                let mut factors = Vec::new();
-                let lim = BigUint::from(2u8).pow(256u64);
-                for _ in 0..1000 {
-                    factors.push(rng.gen_biguint_below(&lim));
-                }
-                (factors, l)
-            },
-            |(factors, l)| {
+    // div_mod_product_comparison(c, 5, &BigUint::from(2u8).pow(256u64), 128);
+    // div_mod_product_comparison(c, 10, &BigUint::from(2u8).pow(256u64), 128);
+    // div_mod_product_comparison(c, 20, &BigUint::from(2u8).pow(256u64), 128);
+    // div_mod_product_comparison(c, 40, &BigUint::from(2u8).pow(256u64), 128);
+    // div_mod_product_comparison(c, 80, &BigUint::from(2u8).pow(256u64), 128);
+    div_mod_product_comparison(c, 160, &BigUint::from(2u8).pow(256u64), 128);
+    // div_mod_product_comparison(c, 320, &BigUint::from(2u8).pow(256u64), 128);
+    // div_mod_product_comparison(c, 640, &BigUint::from(2u8).pow(256u64), 128);
+}
+
+fn div_mod_product_comparison(
+    c: &mut Criterion,
+    num_factors: usize,
+    factor_limit: &BigUint,
+    l_bits: usize,
+) {
+    let rng = &mut ChaCha12Rng::from_entropy();
+    let l = rng.gen_prime(l_bits);
+    let mut factors = Vec::new();
+    for _ in 0..num_factors {
+        factors.push(rng.gen_biguint_below(factor_limit));
+    }
+
+    c.bench_function(
+        &format!("div mod of product naive ({num_factors} elems, {l_bits} divisor bits)"),
+        |b| {
+            b.iter(|| {
                 let mut product = BigUint::one();
                 for factor in factors.iter() {
                     product *= factor;
                 }
 
                 product.div_mod_floor(&l)
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
-    c.bench_function("div mod of product recursive (256000 bits)", |b| {
-        b.iter_batched(
-            || {
-                let rng = &mut ChaCha12Rng::from_entropy();
-                let l = rng.gen_prime(128);
-                let mut factors = Vec::new();
-                let lim = BigUint::from(2u8).pow(256u64);
-                for _ in 0..1000 {
-                    factors.push(rng.gen_biguint_below(&lim));
-                }
-                (factors, l)
-            },
-            |(factors, l)| {
+            })
+        },
+    );
+
+    c.bench_function(
+        &format!(
+            "div mod of product with nlogn product ({num_factors} elems, {l_bits} divisor bits)"
+        ),
+        |b| {
+            b.iter(|| {
+                let product = nlogn_product(&factors);
+                product.div_mod_floor(&l)
+            })
+        },
+    );
+
+    c.bench_function(
+        &format!("div mod of product recursive ({num_factors} elems, {l_bits} divisor bits)"),
+        |b| {
+            b.iter(|| {
                 div_mod_product(&factors, &l);
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
+            })
+        },
+    );
+}
+
+fn nlogn_product(factors: &[BigUint]) -> BigUint {
+    match factors {
+        [] => BigUint::one(),
+        [f] => f.clone(),
+        other => {
+            let mid = other.len() / 2;
+            let (left, right) = factors.split_at(mid);
+            nlogn_product(left) * nlogn_product(right)
+        }
+    }
 }

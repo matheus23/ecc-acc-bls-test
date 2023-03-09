@@ -276,25 +276,13 @@ fn test_div_mod_of_product(
 }
 
 pub fn div_mod_product(factors: &[BigUint], l: &BigUint) -> (BigUint, BigUint) {
-    let factor_qrs = factors
-        .iter()
-        .map(|factor| factor.div_mod_floor(l))
-        .collect::<Vec<_>>();
-    div_mod_product_helper(&factor_qrs, l)
-}
-
-fn div_mod_product_helper(factor_qrs: &[(BigUint, BigUint)], l: &BigUint) -> (BigUint, BigUint) {
-    match factor_qrs {
+    match factors {
         &[] => (BigUint::zero(), BigUint::one()),
-        [(q, r)] => (q.clone(), r.clone()),
+        [f] => f.div_mod_floor(l),
         other => {
             let mid = other.len() / 2;
             let (left, right) = other.split_at(mid);
-            div_mod_product_2(
-                &div_mod_product_helper(left, l),
-                &div_mod_product_helper(right, l),
-                l,
-            )
+            div_mod_product_2(&div_mod_product(left, l), &div_mod_product(right, l), l)
         }
     }
 }
