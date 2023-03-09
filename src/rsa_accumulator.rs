@@ -6,9 +6,12 @@ use std::{
 use digest::Digest;
 use num_bigint_dig::{prime::probably_prime, BigUint, RandBigInt, RandPrime};
 use num_integer::Integer;
-use num_traits::One;
+use num_traits::{One, Zero};
+use proptest::collection::vec;
+use proptest::{prelude::any, prop_assert_eq, strategy::Strategy};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha12Rng;
+use test_strategy::proptest;
 
 #[derive(Debug, PartialEq, Eq)]
 struct RSASetup {
@@ -236,6 +239,79 @@ fn test_golden_poke() {
         proof.r.to_string(),
         "5853184725620449521594003835260194072898583518750701750781116516759621283462"
     );
+}
+
+fn biguint(s: impl Strategy<Value = u64>) -> impl Strategy<Value = BigUint> {
+    s.prop_map(|u| BigUint::from(u))
+}
+
+#[proptest(cases = 1000)]
+fn test_div_mod_of_product_2(
+    #[strategy(biguint((0..100000000u64)))] x1: BigUint,
+    #[strategy(biguint((0..100000000u64)))] x2: BigUint,
+    #[strategy(biguint((1..100000000u64)))] l: BigUint,
+) {
+    let (q1, r1) = x1.div_mod_floor(&l);
+    let (q2, r2) = x2.div_mod_floor(&l);
+    let (exp_q, exp_r) = (&x1 * &x2).div_mod_floor(&l);
+    let (q, r) = div_mod_product_2(&(q1, r1), &(q2, r2), &l);
+
+    prop_assert_eq!(q, exp_q);
+    prop_assert_eq!(r, exp_r);
+}
+
+#[proptest(cases = 1000)]
+fn test_div_mod_of_product(
+    #[strategy(vec(biguint(any::<u64>()), 0..100))] factors: Vec<BigUint>,
+    #[strategy(biguint(1..100000000000u64))] l: BigUint,
+) {
+    let mut product = BigUint::one();
+    for factor in factors.iter() {
+        product *= factor;
+    }
+
+    let expectation = product.div_mod_floor(&l);
+    let actual = div_mod_product(&factors, &l);
+    prop_assert_eq!(actual, expectation);
+}
+
+pub fn div_mod_product(factors: &[BigUint], l: &BigUint) -> (BigUint, BigUint) {
+    let factor_qrs = factors
+        .iter()
+        .map(|factor| factor.div_mod_floor(l))
+        .collect::<Vec<_>>();
+    div_mod_product_helper(&factor_qrs, l)
+}
+
+fn div_mod_product_helper(factor_qrs: &[(BigUint, BigUint)], l: &BigUint) -> (BigUint, BigUint) {
+    match factor_qrs {
+        &[] => (BigUint::zero(), BigUint::one()),
+        [(q, r)] => (q.clone(), r.clone()),
+        other => {
+            let mid = other.len() / 2;
+            let (left, right) = other.split_at(mid);
+            div_mod_product_2(
+                &div_mod_product_helper(left, l),
+                &div_mod_product_helper(right, l),
+                l,
+            )
+        }
+    }
+}
+
+fn div_mod_product_2(
+    (q1, r1): &(BigUint, BigUint),
+    (q2, r2): &(BigUint, BigUint),
+    l: &BigUint,
+) -> (BigUint, BigUint) {
+    let q_prime = q1 * q2 * l + q1 * r2 + q2 * r1;
+    let r_prime = r1 * r2;
+
+    let (q_plus, r) = r_prime.div_mod_floor(l);
+
+    let q = q_prime + q_plus;
+
+    (q, r)
 }
 
 fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {

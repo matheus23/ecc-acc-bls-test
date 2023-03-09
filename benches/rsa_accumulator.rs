@@ -1,11 +1,13 @@
 use std::str::FromStr;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ecc_acc_bls_test::rsa_accumulator::Accumulator;
+use ecc_acc_bls_test::rsa_accumulator::{div_mod_product, Accumulator};
 use num_bigint_dig::{
     prime::{self, probably_prime},
     BigUint, RandBigInt, RandPrime,
 };
+use num_integer::Integer;
+use num_traits::{One, Pow};
 use proptest::prelude::Rng;
 use rand_chacha::{rand_core::SeedableRng, ChaCha12Rng, ChaCha20Rng};
 
@@ -15,40 +17,81 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     )
     .unwrap();
 
-    c.bench_function("256-bit add to accumulator", |b| {
+    // c.bench_function("256-bit add to accumulator", |b| {
+    //     b.iter_batched(
+    //         || {
+    //             let rng = &mut ChaCha12Rng::from_entropy();
+    //             let acc = Accumulator::from(rsa_2048.clone(), rng);
+    //             (acc, rng.gen_prime(256))
+    //         },
+    //         |(mut acc, prime)| black_box(acc.add(black_box(&prime))),
+    //         criterion::BatchSize::SmallInput,
+    //     )
+    // });
+    // c.bench_function("accumulator PoKE* with 1 element", |b| {
+    //     b.iter_batched(
+    //         || {
+    //             let rng = &mut ChaCha12Rng::from_entropy();
+    //             let acc = Accumulator::from(rsa_2048.clone(), rng);
+    //             (acc, rng.gen_prime(256))
+    //         },
+    //         |(mut acc, prime)| black_box(acc.add_batch(black_box(&[prime]))),
+    //         criterion::BatchSize::SmallInput,
+    //     )
+    // });
+    // c.bench_function("accumulator PoKE* with 10 elements", |b| {
+    //     b.iter_batched(
+    //         || {
+    //             let rng = &mut ChaCha12Rng::from_entropy();
+    //             let acc = Accumulator::from(rsa_2048.clone(), rng);
+    //             let mut vec = Vec::new();
+    //             for _ in 0..10 {
+    //                 vec.push(rng.gen_prime(256));
+    //             }
+    //             (acc, vec)
+    //         },
+    //         |(mut acc, primes)| black_box(acc.add_batch(black_box(&primes))),
+    //         criterion::BatchSize::SmallInput,
+    //     )
+    // });
+    c.bench_function("div mod of product naive (256000 bits)", |b| {
         b.iter_batched(
             || {
                 let rng = &mut ChaCha12Rng::from_entropy();
-                let acc = Accumulator::from(rsa_2048.clone(), rng);
-                (acc, rng.gen_prime(256))
-            },
-            |(mut acc, prime)| black_box(acc.add(black_box(&prime))),
-            criterion::BatchSize::SmallInput,
-        )
-    });
-    c.bench_function("accumulator PoKE* with 1 element", |b| {
-        b.iter_batched(
-            || {
-                let rng = &mut ChaCha12Rng::from_entropy();
-                let acc = Accumulator::from(rsa_2048.clone(), rng);
-                (acc, rng.gen_prime(256))
-            },
-            |(mut acc, prime)| black_box(acc.add_batch(black_box(&[prime]))),
-            criterion::BatchSize::SmallInput,
-        )
-    });
-    c.bench_function("accumulator PoKE* with 10 elements", |b| {
-        b.iter_batched(
-            || {
-                let rng = &mut ChaCha12Rng::from_entropy();
-                let acc = Accumulator::from(rsa_2048.clone(), rng);
-                let mut vec = Vec::new();
-                for _ in 0..10 {
-                    vec.push(rng.gen_prime(256));
+                let l = rng.gen_prime(128);
+                let mut factors = Vec::new();
+                let lim = BigUint::from(2u8).pow(256u64);
+                for _ in 0..1000 {
+                    factors.push(rng.gen_biguint_below(&lim));
                 }
-                (acc, vec)
+                (factors, l)
             },
-            |(mut acc, primes)| black_box(acc.add_batch(black_box(&primes))),
+            |(factors, l)| {
+                let mut product = BigUint::one();
+                for factor in factors.iter() {
+                    product *= factor;
+                }
+
+                product.div_mod_floor(&l)
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+    c.bench_function("div mod of product recursive (256000 bits)", |b| {
+        b.iter_batched(
+            || {
+                let rng = &mut ChaCha12Rng::from_entropy();
+                let l = rng.gen_prime(128);
+                let mut factors = Vec::new();
+                let lim = BigUint::from(2u8).pow(256u64);
+                for _ in 0..1000 {
+                    factors.push(rng.gen_biguint_below(&lim));
+                }
+                (factors, l)
+            },
+            |(factors, l)| {
+                div_mod_product(&factors, &l);
+            },
             criterion::BatchSize::SmallInput,
         )
     });

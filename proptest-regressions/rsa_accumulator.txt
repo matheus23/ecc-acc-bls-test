@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 26b0a26e765cdb898ace10d1574edd9ec949756c8f81a31068f3b7d97eef6393 # shrinks to input = _CanIncludeAndGetContentFromFileArgs { x1: BigUint { data: [1] }, x2: BigUint { data: [2] }, x3: BigUint { data: [5011746002042256262] }, l_plus: BigUint { data: [1] } }
+cc 26d5d21b2894c0d5949fe046407da86575cc9d7d6cbb86afa3b12850a79c9771 # shrinks to input = _QuotremOfProduct2Args { x1: BigUint { data: [] }, x2: BigUint { data: [] }, l: BigUint { data: [] } }
