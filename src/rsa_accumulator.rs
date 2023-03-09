@@ -304,7 +304,7 @@ fn div_mod_product_2(
     (q2, r2): &(BigUint, BigUint),
     l: &BigUint,
 ) -> (BigUint, BigUint) {
-    let q_prime = q1 * q2 * l + q1 * r2 + q2 * r1;
+    let q_prime = q1 * (q2 * l + r2) + q2 * r1;
     let r_prime = r1 * r2;
 
     let (q_plus, r) = r_prime.div_mod_floor(l);
