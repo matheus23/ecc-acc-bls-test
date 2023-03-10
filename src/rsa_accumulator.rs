@@ -13,148 +13,71 @@ use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha12Rng;
 use test_strategy::proptest;
 
-#[derive(Debug, PartialEq, Eq)]
-struct RSASetup {
-    modulus: BigUint,
-    modulus_half: BigUint, // invariant: modulus_half = floor(modulus / 2)
-}
-
-impl RSASetup {
-    fn from(modulus: BigUint) -> Self {
-        let modulus_half = &modulus / BigUint::from(2u8);
-        Self {
-            modulus,
-            modulus_half,
-        }
-    }
-
-    fn new(bits: usize, rng: &mut impl RngCore) -> Self {
-        let modulus = &rng.gen_prime(bits / 2) * &rng.gen_prime(bits / 2);
-        Self::from(modulus)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct QRPlus {
-    params: Rc<RSASetup>,
-    num: BigUint, // invariant: num \in [0, params.modulus / 2)
-}
-
-impl Mul for QRPlus {
-    type Output = QRPlus;
-
-    fn mul(mut self, rhs: Self) -> Self::Output {
-        self.mul_assign(rhs);
-        self
-    }
-}
-
-impl Mul for &QRPlus {
-    type Output = QRPlus;
-
-    fn mul(self, rhs: Self) -> Self::Output {
-        let mut num = self.clone();
-        num.mul_assign(rhs.clone());
-        num
-    }
-}
-
-impl MulAssign for QRPlus {
-    fn mul_assign(&mut self, rhs: Self) {
-        if self.params != rhs.params {
-            panic!("Multiplying quadratic residues must use same modulus")
-        }
-        self.num *= rhs.num;
-        self.num %= &self.params.modulus;
-        positive_normalize(&mut self.num, &self.params);
-    }
-}
-
-impl QRPlus {
-    fn new(params: Rc<RSASetup>, rng: &mut impl RngCore) -> Self {
-        // TODO(matheus23): This may not need to be a quadratic residue, but I'm not sure.
-        let r = rng.gen_biguint_below(&params.modulus);
-        let mut num = &r * &r;
-        positive_normalize(&mut num, &params);
-        Self { params, num }
-    }
-
-    fn pow(&mut self, exponent: &BigUint) {
-        self.num = self.num.modpow(exponent, &self.params.modulus);
-        positive_normalize(&mut self.num, &self.params);
-    }
-}
-
-fn positive_normalize(num: &mut BigUint, params: &RSASetup) {
-    if *num >= params.modulus_half {
-        *num += &params.modulus;
-        *num %= &params.modulus;
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Accumulator {
-    params: Rc<RSASetup>,
-    state: QRPlus,
+    modulus: BigUint,
+    state: BigUint,
 }
 
 impl Accumulator {
+    pub fn from_state(modulus: BigUint, state: BigUint) -> Self {
+        Self { modulus, state }
+    }
+
     pub fn from(modulus: BigUint, rng: &mut impl RngCore) -> Self {
-        let params = Rc::new(RSASetup::from(modulus));
-        let state = QRPlus::new(Rc::clone(&params), rng);
-        Self { params, state }
+        let state = Self::setup_quadratic_residue(&modulus, rng);
+        Self { modulus, state }
     }
 
     pub fn new(bits: usize, rng: &mut impl RngCore) -> Self {
-        let params = Rc::new(RSASetup::new(bits, rng));
-        let state = QRPlus::new(Rc::clone(&params), rng);
-        Self { params, state }
+        // immediately throw away P and Q
+        let modulus = rng.gen_prime(bits / 2) * rng.gen_prime(bits / 2);
+        let state = Self::setup_quadratic_residue(&modulus, rng);
+        Self { modulus, state }
+    }
+
+    fn setup_quadratic_residue(modulus: &BigUint, rng: &mut impl RngCore) -> BigUint {
+        let r = rng.gen_biguint_below(modulus);
+        r.modpow(&BigUint::from(2u8), modulus)
     }
 
     pub fn add(&mut self, prime_elem: &BigUint) {
-        if !probably_prime(prime_elem, 20) {
-            panic!("Parameter needs to be prime!");
-        }
-
-        self.state.pow(prime_elem);
+        self.state = self.state.modpow(prime_elem, &self.modulus);
     }
 
-    pub fn simple_verify(&self, witness: &Self, prime_elem: &BigUint) -> bool {
+    pub fn simple_verify(&self, witness: &Self, exponent: &BigUint) -> bool {
         let mut w = witness.clone();
-        w.add(prime_elem);
+        w.add(exponent);
         w.state == self.state
     }
 
-    pub fn add_batch(&mut self, primes: &[BigUint]) -> PokeStar {
-        let witness = self.state.clone();
-
-        for prime in primes.iter() {
-            self.add(prime);
-        }
-
-        let mut hasher = sha3::Sha3_256::new();
-        hasher.update(&self.params.modulus.to_bytes_le());
-        hasher.update(&witness.num.to_bytes_le());
-        hasher.update(&self.state.num.to_bytes_le());
-        let (l, l_nonce) = prime_digest(hasher);
-
+    pub fn add_batch(&mut self, primes: &[BigUint]) -> (BigUint, PokeStar) {
         let mut product = BigUint::one();
         for prime in primes.iter() {
             product *= prime;
         }
 
+        let witness = self.state.clone();
+        self.add(&product);
+
+        let mut hasher = sha3::Sha3_256::new();
+        hasher.update(&self.modulus.to_bytes_le());
+        hasher.update(&witness.to_bytes_le());
+        hasher.update(&self.state.to_bytes_le());
+        let (l, l_nonce) = prime_digest(hasher);
+
         let (q, r) = product.div_mod_floor(&l);
 
-        let big_q = witness.num.modpow(&q, &self.params.modulus);
+        let big_q = witness.modpow(&q, &self.modulus);
 
-        PokeStar { l_nonce, big_q, r }
+        (witness, PokeStar { l_nonce, big_q, r })
     }
 
-    pub fn verify(&self, witness: &Self, proof: &PokeStar) -> bool {
+    pub fn verify(&self, witness: &BigUint, proof: &PokeStar) -> bool {
         let mut hasher = sha3::Sha3_256::new();
-        hasher.update(&self.params.modulus.to_bytes_le());
-        hasher.update(&witness.state.num.to_bytes_le());
-        hasher.update(&self.state.num.to_bytes_le());
+        hasher.update(&self.modulus.to_bytes_le());
+        hasher.update(&witness.to_bytes_le());
+        hasher.update(&self.state.to_bytes_le());
         let Some(l) = verify_prime_digest(hasher, proof.l_nonce) else {
             return false;
         };
@@ -163,12 +86,11 @@ impl Accumulator {
             return false;
         }
 
-        let mut expected_state = proof.big_q.modpow(&l, &self.params.modulus)
-            * witness.state.num.modpow(&proof.r, &self.params.modulus);
+        let expected_state = proof.big_q.modpow(&l, &self.modulus)
+            * witness.modpow(&proof.r, &self.modulus)
+            % &self.modulus;
 
-        positive_normalize(&mut expected_state, &self.params);
-
-        expected_state == self.state.num
+        expected_state == self.state
     }
 }
 
@@ -209,15 +131,14 @@ fn test_add_poke() {
         rng.gen_prime(256),
         rng.gen_prime(256),
     ];
-    let witness = acc.clone();
-    let proof = acc.add_batch(&elems);
+    let (witness, proof) = acc.add_batch(&elems);
     assert!(acc.verify(&witness, &proof));
-    assert!(!acc.verify(&acc, &proof));
+    assert!(!acc.verify(&acc.state, &proof));
 }
 
 #[test]
 fn test_golden_poke() {
-    let rng = &mut ChaCha12Rng::from_seed(*b"Hello yes this is dog. Or seed.?");
+    let rng = &mut ChaCha12Rng::from_seed(*b"Hello? Yes this is dog. Or seed?");
     let bits = 2048;
     let mut acc = Accumulator::new(bits, rng);
     let elems = [
@@ -226,18 +147,17 @@ fn test_golden_poke() {
         rng.gen_prime(256),
         rng.gen_prime(256),
     ];
-    let witness = acc.clone();
-    let proof = acc.add_batch(&elems);
+    let (witness, proof) = acc.add_batch(&elems);
     assert!(acc.verify(&witness, &proof));
-    assert!(!acc.verify(&acc, &proof));
-    // println!("l_nonce: {}", proof.l_nonce);
-    // println!("big_q: {}", proof.big_q);
-    // println!("r: {}", proof.r);
-    assert_eq!(proof.l_nonce.to_string(), "8");
-    assert_eq!(proof.big_q.to_string(), "8409876224065280613797694548964236694502270756376562071381105811817285063835834270766028060927599775054808890058975111835048261352946293480288259808548006750032703295192015588193327429982320216042858602771871685378214073242491387027672710350772276401776856424112720398319262246092753143317972339262235949369921342802895407883818547136524657379615581152287007457703214243248689462523048779063144325264697105566222711681755279548300048803718105225423218377201581130548415325430788307992260686433957444033358827014496583453713620082391848594260119516879051639022509815961111057103716320899807113080527495003819943089985");
+    assert!(!acc.verify(&acc.state, &proof));
+    println!("l_nonce: {}", proof.l_nonce);
+    println!("big_q: {}", proof.big_q);
+    println!("r: {}", proof.r);
+    assert_eq!(proof.l_nonce.to_string(), "1282");
+    assert_eq!(proof.big_q.to_string(), "12117271039263737819615146232217918602560888065784689992116757202851990361309932042932100867413234044316909888405349944336001137043271091115456367161556148793576819234837124506888775982486516238849956150889610482533485615619012138164998537585561668303564967285889086839307783103652491442079340022590334512056757180948335498358783927473330318867846674177749827422204944261549138740242880034294033298941062569994542411491450238695409104544658592695382785683228261336964412330586335774532088432512328518434699788636500507978659400729616038659350039107693570974084627918823399015104723803362621969117129946301649236032054");
     assert_eq!(
         proof.r.to_string(),
-        "5853184725620449521594003835260194072898583518750701750781116516759621283462"
+        "49979675822201868791018284424654332550088070864253120193918675049884441160229"
     );
 }
 
@@ -275,6 +195,9 @@ fn test_div_mod_of_product(
     prop_assert_eq!(actual, expectation);
 }
 
+/// Not actually faster than just calling .div_mod_floor on the huge product,
+/// if the product is computed recursively in O(n log n), and even slower than
+/// the direct div_mod_floor on a product computed O(n), if the product is <256kbit.
 pub fn div_mod_product(factors: &[BigUint], l: &BigUint) -> (BigUint, BigUint) {
     match factors {
         &[] => (BigUint::zero(), BigUint::one()),
