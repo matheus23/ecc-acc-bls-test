@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ecc_acc_bls_test::rsa_accumulator::{div_mod_product, Accumulator};
+use ecc_acc_bls_test::rsa_accumulator::{div_mod_product, nlogn_product, Accumulator};
 use num_bigint_dig::{
     prime::{self, probably_prime},
     BigUint, RandBigInt, RandPrime,
@@ -97,7 +97,7 @@ fn div_mod_product_comparison(
         ),
         |b| {
             b.iter(|| {
-                let product = nlogn_product(&factors);
+                let product = nlogn_product(&factors, |f| f);
                 product.div_mod_floor(&l)
             })
         },
@@ -111,16 +111,4 @@ fn div_mod_product_comparison(
             })
         },
     );
-}
-
-fn nlogn_product(factors: &[BigUint]) -> BigUint {
-    match factors {
-        [] => BigUint::one(),
-        [f] => f.clone(),
-        other => {
-            let mid = other.len() / 2;
-            let (left, right) = factors.split_at(mid);
-            nlogn_product(left) * nlogn_product(right)
-        }
-    }
 }

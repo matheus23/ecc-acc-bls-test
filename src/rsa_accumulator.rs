@@ -6,7 +6,7 @@ use std::{
 use digest::Digest;
 use num_bigint_dig::{prime::probably_prime, BigUint, RandBigInt, RandPrime};
 use num_integer::Integer;
-use num_traits::{One, Zero};
+use num_traits::{One, Pow, Zero};
 use proptest::{collection::vec, prop_assert};
 use proptest::{prelude::any, prop_assert_eq, strategy::Strategy};
 use rand::{RngCore, SeedableRng};
@@ -225,7 +225,37 @@ fn div_mod_product_2(
     (q, r)
 }
 
-fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {
+/// With (alpha_i, x_i) = bases_and_exponents[i], this
+/// computes the product of all alpha_i ^ (product of all x_j with j != i).
+pub fn multi_exp(bases_and_exponents: &[(BigUint, BigUint)], modulus: &BigUint) -> BigUint {
+    match bases_and_exponents {
+        &[] => BigUint::one(),
+        [(base, _)] => base.clone() % modulus,
+        other => {
+            let mid = other.len() / 2;
+            let (left, right) = other.split_at(mid);
+            let x_star_left = nlogn_product(left, |(_, x_i)| x_i);
+            let x_star_right = nlogn_product(right, |(_, x_i)| x_i);
+            (multi_exp(left, modulus).modpow(&x_star_right, modulus)
+                * multi_exp(right, modulus).modpow(&x_star_left, modulus))
+                % modulus
+        }
+    }
+}
+
+pub fn nlogn_product<A>(factors: &[A], f: fn(&A) -> &BigUint) -> BigUint {
+    match factors {
+        [] => BigUint::one(),
+        [factor] => f(factor).clone(),
+        other => {
+            let mid = other.len() / 2;
+            let (left, right) = factors.split_at(mid);
+            nlogn_product(left, f) * nlogn_product(right, f)
+        }
+    }
+}
+
+pub fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {
     let hash = hasher.finalize();
     let mut candidate = BigUint::from_bytes_le(&hash[..16]);
     let mut inc: u32 = if &candidate % 2usize == BigUint::one() {
@@ -245,7 +275,7 @@ fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {
     }
 }
 
-fn verify_prime_digest(hasher: impl Digest, inc: u32) -> Option<BigUint> {
+pub fn verify_prime_digest(hasher: impl Digest, inc: u32) -> Option<BigUint> {
     let hash = hasher.finalize();
     let mut to_verify = BigUint::from_bytes_le(&hash[..16]);
     to_verify += inc;
@@ -264,4 +294,39 @@ fn test_prime_digest(#[strategy(vec(any::<u8>(), 0..100))] bytes: Vec<u8>) {
     let (prime_hash, inc) = prime_digest(hasher.clone());
     prop_assert!(probably_prime(&prime_hash, 20));
     prop_assert_eq!(verify_prime_digest(hasher.clone(), inc), Some(prime_hash));
+}
+
+fn rand_modulus(bits: impl Strategy<Value = usize>) -> impl Strategy<Value = BigUint> {
+    (bits, any::<[u8; 32]>().no_shrink()).prop_map(move |(bits, seed)| {
+        let bits = std::cmp::max(bits, 4);
+        let rng = &mut ChaCha12Rng::from_seed(seed);
+        rng.gen_prime(bits / 2) * rng.gen_prime(bits / 2)
+    })
+}
+
+#[proptest(cases = 100)]
+fn test_multi_exp(
+    #[strategy(vec((1u64.., 1u64..), 0..100))] bases_and_exponents: Vec<(u64, u64)>,
+    #[strategy(rand_modulus(4usize..64))] modulus: BigUint,
+) {
+    let bases_and_exponents: Vec<(BigUint, BigUint)> = bases_and_exponents
+        .iter()
+        .map(|(b, e)| (BigUint::from(*b), BigUint::from(*e)))
+        .collect();
+
+    let actual = multi_exp(&bases_and_exponents, &modulus);
+    let expected = multi_exp_naive(&bases_and_exponents, &modulus);
+    prop_assert_eq!(actual, expected);
+}
+
+fn multi_exp_naive(bases_and_exponents: &[(BigUint, BigUint)], modulus: &BigUint) -> BigUint {
+    let x_star = nlogn_product(&bases_and_exponents, |(_, x_i)| x_i);
+
+    let mut product = BigUint::one();
+    for (alpha_i, x_i) in bases_and_exponents {
+        let exponent = x_star.div_floor(&x_i);
+        product *= alpha_i.modpow(&exponent, modulus);
+        product %= modulus;
+    }
+    product
 }
