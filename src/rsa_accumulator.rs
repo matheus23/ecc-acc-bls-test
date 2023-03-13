@@ -7,7 +7,7 @@ use digest::Digest;
 use num_bigint_dig::{prime::probably_prime, BigUint, RandBigInt, RandPrime};
 use num_integer::Integer;
 use num_traits::{One, Zero};
-use proptest::collection::vec;
+use proptest::{collection::vec, prop_assert};
 use proptest::{prelude::any, prop_assert_eq, strategy::Strategy};
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha12Rng;
@@ -227,7 +227,7 @@ fn div_mod_product_2(
 
 fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {
     let hash = hasher.finalize();
-    let mut candidate = BigUint::from_bytes_le(&hash);
+    let mut candidate = BigUint::from_bytes_le(&hash[..16]);
     let mut inc: u32 = if &candidate % 2usize == BigUint::one() {
         0
     } else {
@@ -247,11 +247,21 @@ fn prime_digest(hasher: impl Digest) -> (BigUint, u32) {
 
 fn verify_prime_digest(hasher: impl Digest, inc: u32) -> Option<BigUint> {
     let hash = hasher.finalize();
-    let mut to_verify = BigUint::from_bytes_le(&hash);
+    let mut to_verify = BigUint::from_bytes_le(&hash[..16]);
     to_verify += inc;
     if !probably_prime(&to_verify, 20) {
         None
     } else {
         Some(to_verify)
     }
+}
+
+#[proptest(cases = 1000)]
+fn test_prime_digest(#[strategy(vec(any::<u8>(), 0..100))] bytes: Vec<u8>) {
+    let mut hasher = sha3::Sha3_256::new();
+    hasher.update(&bytes);
+
+    let (prime_hash, inc) = prime_digest(hasher.clone());
+    prop_assert!(probably_prime(&prime_hash, 20));
+    prop_assert_eq!(verify_prime_digest(hasher.clone(), inc), Some(prime_hash));
 }
