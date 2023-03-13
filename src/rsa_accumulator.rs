@@ -1,12 +1,8 @@
-use std::{
-    ops::{Mul, MulAssign},
-    rc::Rc,
-};
-
 use digest::Digest;
+use num_bigint_dig::ModInverse;
 use num_bigint_dig::{prime::probably_prime, BigUint, RandBigInt, RandPrime};
 use num_integer::Integer;
-use num_traits::{One, Pow, Zero};
+use num_traits::{One, Signed, Zero};
 use proptest::{collection::vec, prop_assert};
 use proptest::{prelude::any, prop_assert_eq, strategy::Strategy};
 use rand::{RngCore, SeedableRng};
@@ -104,7 +100,75 @@ pub struct PokeStar {
     r: BigUint,
 }
 
-impl PokeStar {}
+#[derive(Debug)]
+pub struct PokeStars {
+    big_q_product: BigUint,
+    parts: Vec<PokeStarsPart>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PokeStarsPart {
+    l_nonce: u32,
+    r: BigUint,
+}
+
+impl PokeStars {
+    fn new(pokes: &[PokeStar], modulus: &BigUint) -> PokeStars {
+        let big_q_product = nlogn_mod_poduct(&pokes, |poke| &poke.big_q, modulus);
+        let parts = pokes
+            .iter()
+            .map(|poke| PokeStarsPart {
+                l_nonce: poke.l_nonce,
+                r: poke.r.clone(),
+            })
+            .collect();
+        PokeStars {
+            big_q_product,
+            parts,
+        }
+    }
+
+    fn verify(&self, base: &BigUint, commitments: &[BigUint], modulus: &BigUint) -> bool {
+        if commitments.len() != self.parts.len() {
+            return false;
+        }
+
+        let mut hasher_base = sha3::Sha3_256::new();
+        hasher_base.update(&modulus.to_bytes_le());
+        hasher_base.update(&base.to_bytes_le());
+
+        let mut bases_and_exponents = Vec::with_capacity(commitments.len());
+
+        for (commitment, part) in commitments.iter().zip(self.parts.iter()) {
+            // computing l_i
+            let mut hasher = hasher_base.clone();
+            hasher.update(&commitment.to_bytes_le());
+            let Some(prime_hash) = verify_prime_digest(hasher, part.l_nonce) else {
+                return false;
+            };
+
+            if part.r >= prime_hash {
+                return false;
+            }
+
+            // computing alpha_i
+            let base = (commitment
+                * base
+                    .mod_inverse(modulus)
+                    .unwrap()
+                    .to_biguint()
+                    .unwrap()
+                    .modpow(&part.r, modulus))
+                % modulus;
+
+            bases_and_exponents.push((base, prime_hash));
+        }
+
+        let l_star = nlogn_product(&bases_and_exponents, |(_, l_i)| l_i);
+
+        self.big_q_product.modpow(&l_star, modulus) == multi_exp(&bases_and_exponents, modulus)
+    }
+}
 
 #[test]
 fn test_add() {
@@ -159,6 +223,29 @@ fn test_golden_poke() {
         proof.r.to_string(),
         "49979675822201868791018284424654332550088070864253120193918675049884441160229"
     );
+}
+
+#[test]
+fn test_poke_aggregation() {
+    let rng = &mut ChaCha12Rng::from_seed(*b"Hello? Yes this is dog. Or seed?");
+    let bits = 2048;
+    let acc = Accumulator::new(bits, rng);
+    let elems = [
+        rng.gen_prime(256),
+        rng.gen_prime(256),
+        rng.gen_prime(256),
+        rng.gen_prime(256),
+    ];
+    let mut commitments = Vec::new();
+    let mut pokes = Vec::new();
+    for elem in elems {
+        let mut acc2 = acc.clone();
+        let (_, poke) = acc2.add_batch(&[elem.clone()]);
+        commitments.push(acc2.state);
+        pokes.push(poke);
+    }
+    let poke_agg = PokeStars::new(&pokes, &acc.modulus);
+    assert!(poke_agg.verify(&acc.state, &commitments, &acc.modulus));
 }
 
 fn biguint(s: impl Strategy<Value = u64>) -> impl Strategy<Value = BigUint> {
@@ -251,6 +338,18 @@ pub fn nlogn_product<A>(factors: &[A], f: fn(&A) -> &BigUint) -> BigUint {
             let mid = other.len() / 2;
             let (left, right) = factors.split_at(mid);
             nlogn_product(left, f) * nlogn_product(right, f)
+        }
+    }
+}
+
+pub fn nlogn_mod_poduct<A>(factors: &[A], f: fn(&A) -> &BigUint, modulus: &BigUint) -> BigUint {
+    match factors {
+        [] => BigUint::one(),
+        [factor] => f(factor) % modulus,
+        other => {
+            let mid = other.len() / 2;
+            let (left, right) = factors.split_at(mid);
+            (nlogn_product(left, f) * nlogn_product(right, f)) % modulus
         }
     }
 }
