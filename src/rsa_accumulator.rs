@@ -1,8 +1,10 @@
+use std::collections::HashSet;
+
 use digest::Digest;
 use num_bigint_dig::ModInverse;
 use num_bigint_dig::{prime::probably_prime, BigUint, RandBigInt, RandPrime};
 use num_integer::Integer;
-use num_traits::{One, Signed, Zero};
+use num_traits::{One, Signed, ToPrimitive, Zero};
 use proptest::{collection::vec, prop_assert};
 use proptest::{prelude::any, prop_assert_eq, strategy::Strategy};
 use rand::{RngCore, SeedableRng};
@@ -428,4 +430,91 @@ fn multi_exp_naive(bases_and_exponents: &[(BigUint, BigUint)], modulus: &BigUint
         product %= modulus;
     }
     product
+}
+
+#[test]
+fn qr_test() {
+    for modulus in 10..10000u64 {
+        // println!("Modulus: {modulus}");
+        let mut qrs = HashSet::new();
+        for i in 1..modulus {
+            let qr = (i * i) % modulus;
+            if qr == 0 {
+                continue;
+            }
+            qrs.insert(qr);
+        }
+
+        let mut group_sizes = 0;
+        let groups = qrs.len();
+
+        for qr in qrs {
+            let mut group = HashSet::from([qr]);
+            let mut qr_power = qr;
+            loop {
+                qr_power *= qr;
+                qr_power %= modulus;
+
+                if group.contains(&qr_power) {
+                    break;
+                }
+
+                group.insert(qr_power);
+            }
+
+            group_sizes += group.len();
+            // println!(" - QR {qr} => {group:?}");
+        }
+
+        let avg_size = group_sizes as f64 / groups as f64;
+        println!("Modulus {modulus} avg QR groups size: {avg_size}");
+    }
+}
+
+#[test]
+fn qr_group_size_of_rsa_moduli() {
+    let rng = &mut ChaCha12Rng::from_seed([0u8; 32]);
+    let trials = 10;
+    for bits in 10..20usize {
+        let mut group_sizes = 0;
+        let mut groups = 0;
+        let mut min_size = usize::MAX;
+        let mut max_size = 0;
+        for _ in 0..trials {
+            let p = rng.gen_prime(bits).to_u64().unwrap();
+            let q = rng.gen_prime(bits).to_u64().unwrap();
+            let modulus = p * q;
+
+            for _ in 0..trials {
+                let x = rng
+                    .gen_biguint_range(&BigUint::one(), &BigUint::from(modulus))
+                    .to_u64()
+                    .unwrap();
+                let qr = (x * x) % modulus;
+                let mut group = HashSet::from([qr]);
+                let mut qr_power = qr;
+                loop {
+                    qr_power *= qr;
+                    qr_power %= modulus;
+
+                    if group.contains(&qr_power) {
+                        break;
+                    }
+
+                    group.insert(qr_power);
+                }
+
+                use std::cmp;
+                min_size = cmp::min(group.len(), min_size);
+                max_size = cmp::max(group.len(), max_size);
+                group_sizes += group.len();
+                groups += 1;
+            }
+        }
+        let avg_size = group_sizes as f64 / groups as f64;
+        println!(
+            "{}-bit modulus avg QR groups size: {avg_size} (min: {min_size}, max: {max_size})",
+            bits * 2
+        );
+    }
 }
